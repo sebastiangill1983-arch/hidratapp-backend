@@ -1,0 +1,4 @@
+flask==3.0.3
+flask-cors==6.0.5
+pywebpush==2.5.0
+gunicorn==22.0.0
