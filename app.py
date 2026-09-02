@@ -113,8 +113,11 @@ def scheduler_loop():
                     already_sent_this_minute = entry.get("last_sent_minute") == minutes_since_midnight
 
                     if should_send and not already_sent_this_minute:
-                        send_push(entry["subscription"], settings)
-                        entry["last_sent_minute"] = minutes_since_midnight
+                        ok = send_push(entry["subscription"], settings)
+                        if not ok:
+                            del subs[key]  # suscripción rota/vencida: la sacamos
+                        else:
+                            entry["last_sent_minute"] = minutes_since_midnight
                         changed = True
 
                 if changed:
@@ -137,8 +140,10 @@ def send_push(subscription, settings):
             vapid_private_key=VAPID_PRIVATE_KEY_FILE,
             vapid_claims=dict(VAPID_CLAIMS),
         )
+        return True
     except WebPushException as e:
         print("Push falló (probablemente suscripción vencida):", repr(e))
+        return False
 
 
 @app.route("/", methods=["GET"])
