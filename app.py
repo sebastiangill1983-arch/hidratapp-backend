@@ -148,6 +148,13 @@ def scheduler_loop():
                     settings = entry["settings"]
                     short_id = endpoint[-12:]  # solo para identificar en el log sin ensuciarlo
 
+                    # El usuario puede apagar los recordatorios desde la app (botón on/off).
+                    # Por compatibilidad con suscripciones guardadas antes de este cambio,
+                    # si el campo no está presente asumimos que está activado.
+                    if settings.get("remindersEnabled") is False:
+                        print(f"[scheduler] {short_id}: recordatorios pausados por el usuario")
+                        continue
+
                     within_hours = is_within_work_hours(now, settings["startHour"], settings["endHour"])
                     if not within_hours:
                         print(
