@@ -4,6 +4,7 @@ import threading
 import time
 from datetime import datetime
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import requests
 from flask import Flask, request, jsonify
@@ -16,6 +17,10 @@ CORS(app)  # permite que la PWA en GitHub Pages llame a este servidor
 VAPID_PRIVATE_KEY_FILE = os.path.join(os.path.dirname(__file__), "private_key.pem")
 VAPID_PUBLIC_KEY = "BDToAnFgEtg6lCIJEMlu0idHQ8humRyuGN2Pp2XpcCdfhoJThutetY-Q8Vd0QOX0AxeEGMKM-jU2EPnnBWfCHMg"
 VAPID_CLAIMS = {"sub": "mailto:sebastian@example.com"}
+
+# Zona horaria de referencia para calcular "ahora" y comparar contra startHour/endHour.
+# Render corre los servidores en UTC, así que sin esto el scheduler comparaba mal.
+ARG_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 # ---------- Supabase (guarda las suscripciones; sobrevive a que el server se reinicie) ----------
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -130,29 +135,49 @@ def scheduler_loop():
     """Corre en un thread aparte, revisa cada 30s si hay que mandar un recordatorio."""
     while True:
         try:
-            now = datetime.now()
+            # OJO: Render corre en UTC. Usamos la zona horaria de Argentina para que
+            # startHour/endHour se comparen contra la hora local real del usuario.
+            now = datetime.now(ARG_TZ)
+            print(f"[scheduler] tick {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+
             with _lock:
                 subs = sb_load_all()
+                print(f"[scheduler] {len(subs)} suscripcion(es) cargada(s)")
 
                 for endpoint, entry in subs.items():
                     settings = entry["settings"]
-                    if not is_within_work_hours(now, settings["startHour"], settings["endHour"]):
+                    short_id = endpoint[-12:]  # solo para identificar en el log sin ensuciarlo
+
+                    within_hours = is_within_work_hours(now, settings["startHour"], settings["endHour"])
+                    if not within_hours:
+                        print(
+                            f"[scheduler] {short_id}: fuera de horario "
+                            f"({settings['startHour']}-{settings['endHour']}, ahora {now.strftime('%H:%M')})"
+                        )
                         continue
 
                     interval = int(settings.get("intervalMinutes", 60))
                     minutes_since_midnight = now.hour * 60 + now.minute
                     should_send = minutes_since_midnight % interval == 0
-
                     already_sent_this_minute = entry.get("last_sent_minute") == minutes_since_midnight
 
+                    print(
+                        f"[scheduler] {short_id}: dentro de horario, "
+                        f"interval={interval}min, should_send={should_send}, "
+                        f"already_sent={already_sent_this_minute}"
+                    )
+
                     if should_send and not already_sent_this_minute:
+                        print(f"[scheduler] {short_id}: enviando push...")
                         ok = send_push(entry["subscription"], settings)
                         if not ok:
-                            sb_delete(endpoint)  # suscripción rota/vencida: la sacamos
+                            print(f"[scheduler] {short_id}: suscripción rota/vencida, se elimina")
+                            sb_delete(endpoint)
                         else:
+                            print(f"[scheduler] {short_id}: push enviado OK")
                             sb_update_last_sent(endpoint, minutes_since_midnight)
         except Exception as e:
-            print("Error en scheduler:", e)
+            print("Error en scheduler:", repr(e))
 
         time.sleep(30)
 
